@@ -1,0 +1,93 @@
+server:
+  port: 8087
+
+spring:
+  application:
+    name: jc-sales-agent
+  main:
+    web-application-type: servlet   # 同时引了 webflux 时强制使用 servlet 模式，避免 actuator 端点映射异常
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password:   # 本地 Redis 默认无密码
+      database: 0
+
+  # 数据库
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/jc-ai?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:123456}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+
+  # SQL 初始化（建表 + 测试数据，IF NOT EXISTS + INSERT IGNORE 安全重复执行）
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
+      data-locations: classpath:db/data.sql
+
+  # JPA
+  jpa:
+    hibernate:
+      ddl-auto: none            # 使用 schema.sql 建表，不用 JPA 自动建表
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+    defer-datasource-initialization: true  # 等 JPA 初始化后再执行 SQL 脚本
+
+# LangChain4j OpenAI 兼容接口 → DeepSeek
+langchain4j:
+  open-ai:
+    chat-model:
+      base-url: https://api.deepseek.com/v1
+      api-key: sk-006862e3019e4fff99b2ebe7e00cef12
+      model-name: deepseek-chat
+      temperature: 0.1          # 数据分析场景用低温度，减少随机性
+      max-tokens: 2048
+    streaming-chat-model:
+      base-url: https://api.deepseek.com/v1
+      api-key: sk-006862e3019e4fff99b2ebe7e00cef12
+      model-name: deepseek-chat
+      temperature: 0.1
+      max-tokens: 2048
+
+# Sa-Token 配置（轻量权限框架）
+sa-token:
+  token-name: Authorization
+  timeout: 86400
+  is-concurrent: true
+  is-share: true
+  token-style: uuid
+  is-log: false
+
+# Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+  endpoint:
+    health:
+      show-details: always
+
+# 应用自定义配置
+sales-agent:
+  tool:
+    anomaly-threshold-days: 5
+    trend-drop-threshold: 0.3
+
+logging:
+  level:
+    com.jichi.salesAgent: DEBUG
+    dev.langchain4j: INFO
+app:
+  auth:
+    enabled: false
