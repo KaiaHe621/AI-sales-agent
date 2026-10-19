@@ -1,8 +1,0 @@
-/.idea/
-**/.DS_Store
-/sales-agent/target/
-/sales-agent-front/node_modules/
-/sales-agent-front/dist/
-/sales-agent-front/package-lock.json
-/sessions/
-/eval-baselines/
