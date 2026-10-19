@@ -48,10 +48,6 @@ npm run dev
 
 前端运行在 `http://localhost:5173`，`/auth` 与 `/agent` 接口通过 Vite 代理转发到后端 8087。
 
-## 相关文档
-
-- [智能销售 Agent 项目学习文档](./sales-agent/智能销售Agent项目学习文档.md)
-
 ## License
 
 见 [sales-agent/LICENSE](./sales-agent/LICENSE)。
