@@ -24,7 +24,7 @@
 
 ## 快速开始
 
-### 后端（sales-agent）sales-agent/README.md
+### 后端（sales-agent）https://github.com/KaiaHe621/AI-sales-agent/blob/main/sales-agent/README.md
 
 1. 准备 MySQL 8 与 Redis（默认 `localhost:6379` 无密码）
 2. 启动时自动执行 `src/main/resources/db/schema.sql` 建表并导入测试数据
