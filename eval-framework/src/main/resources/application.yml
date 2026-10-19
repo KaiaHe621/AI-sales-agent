@@ -1,0 +1,16 @@
+spring:
+  ai:
+    dashscope:
+      api-key: xxxx
+      chat:
+        options:
+          model: qwen3-max             # 默认使用 qwen-max
+          temperature: 0.7
+          max-tokens: 2048
+eval:
+  ci:
+    min-pass-rate: 0.70
+    baseline-name: ci-baseline
+logging:
+  level:
+    com.jichi.eval: DEBUG

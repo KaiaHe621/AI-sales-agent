@@ -1,0 +1,15 @@
+spring:
+  ai:
+    openai:
+      # 如果用 DeepSeek，改成 https://api.deepseek.com
+      # 如果用 OpenAI，改成 https://api.openai.com（或者不填，默认就是这个）
+      base-url: https://api.deepseek.com
+      api-key: ${DEEPSEEK_API_KEY}  # 从环境变量读取，不要直接写在配置文件里
+      chat:
+        options:
+          model: deepseek-chat        # DeepSeek-V3 的模型名
+          temperature: 0.7        # 创意度，0-2，越高越随机
+          max-tokens: 2048        # 最大输出 Token 数
+          top-p: 1.0
+logging:
+  config: classpath:logback-spring.xml

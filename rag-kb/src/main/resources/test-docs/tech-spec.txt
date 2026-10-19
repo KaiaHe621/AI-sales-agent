@@ -1,0 +1,121 @@
+技术规范文档 v1.4
+技术委员会 2025年修订版
+
+第一章 代码规范
+
+1.1 提交规范
+
+所有代码提交必须遵循以下Commit Message格式：
+type(scope): message
+
+type 类型：
+- feat：新功能
+- fix：Bug修复
+- docs：文档修改
+- refactor：重构（不影响功能）
+- perf：性能优化
+- test：测试相关
+- chore：构建工具、依赖等变更
+
+示例：
+feat(payment): 新增微信支付接口
+fix(order): 修复订单金额计算精度问题
+
+1.2 分支策略
+
+主要分支：
+- main：生产环境代码，只接受来自 release 分支的 PR
+- develop：开发主分支，日常开发在此分支基础上创建特性分支
+- feature/xxx：特性开发分支，从 develop 创建，完成后 PR 到 develop
+- hotfix/xxx：紧急修复分支，从 main 创建，完成后同时 PR 到 main 和 develop
+
+代码审查规则：
+- 所有 PR 至少需要 2 名同事 approve
+- 禁止直接 push 到 main 和 develop 分支
+
+第二章 接口规范
+
+2.1 RESTful 接口设计
+
+接口设计遵循 RESTful 规范：
+- GET：查询数据，幂等，不修改服务端状态
+- POST：创建资源
+- PUT：全量更新资源
+- PATCH：部分更新资源
+- DELETE：删除资源
+
+URL 规范：
+- 使用名词复数：/api/users, /api/orders
+- 版本号在 URL 中：/api/v1/users
+- 禁止使用动词：/api/getUser（错误），应为 GET /api/users/{id}
+
+2.2 响应格式
+
+统一响应格式：
+{
+  "code": 200,
+  "message": "success",
+  "data": {},
+  "traceId": "abc123"
+}
+
+错误码规范：
+- 200：成功
+- 400：请求参数错误
+- 401：未认证
+- 403：无权限
+- 404：资源不存在
+- 429：请求过于频繁（限流）
+- 500：服务器内部错误
+
+2.3 API 限流策略
+
+为保护后端服务，所有 API 接口均实施限流：
+- 单用户每分钟最多100次调用
+- 采用滑动窗口算法，比固定窗口更精确
+- 超出限制返回 HTTP 429，响应头包含 Retry-After 字段
+- AI 相关接口（大模型调用）单独限流：单用户每分钟10次
+
+第三章 数据库规范
+
+3.1 命名规范
+
+- 表名：下划线分隔，复数，如 user_orders
+- 字段名：下划线分隔，如 created_at
+- 主键：统一命名为 id，BIGSERIAL 类型
+- 时间字段：created_at, updated_at, deleted_at
+
+3.2 必须包含的字段
+
+所有业务表必须包含：
+- id: BIGSERIAL PRIMARY KEY
+- created_at: TIMESTAMP NOT NULL DEFAULT NOW()
+- updated_at: TIMESTAMP NOT NULL DEFAULT NOW()
+- is_deleted: BOOLEAN NOT NULL DEFAULT FALSE（软删除）
+
+3.3 索引规范
+
+- 每个查询高频字段必须建索引
+- 软删除字段添加条件索引：WHERE is_deleted = FALSE
+- 联合索引遵循最左匹配原则
+- 禁止在生产环境直接 DROP INDEX（先 CONCURRENTLY 创建新索引再删旧的）
+
+第四章 安全规范
+
+4.1 认证鉴权
+
+- 所有 API 必须通过 Sa-Token JWT 认证
+- Token 有效期不超过 24 小时
+- 敏感操作（删除、支付等）需要二次验证
+
+4.2 SQL 注入防护
+
+- 禁止拼接 SQL 字符串，全部使用参数化查询
+- ORM 框架（JPA/MyBatis）的动态查询必须使用预编译语句
+- AI 系统中模型生成的参数，必须经过白名单校验后才能传入查询
+
+4.3 敏感数据处理
+
+- 密码必须使用 BCrypt 加密存储
+- 手机号、身份证等 PII 数据，展示时进行脱敏处理
+- 禁止在日志中打印完整的敏感信息

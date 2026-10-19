@@ -1,0 +1,38 @@
+spring:
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:3306/jc-ai?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: root
+    password: ${MYSQL_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY}   # 从环境变量读取
+      embedding:
+        options:
+          model: text-embedding-v3  # 通义 Embedding 模型
+      chat:
+        options:
+          model: qwen3-max             # 默认使用 qwen-max
+          temperature: 0.7
+          max-tokens: 2048
+    # 主力：DeepSeek（便宜）
+    openai:
+      api-key: ${DEEPSEEK_API_KEY}
+      base-url: https://api.deepseek.com
+      chat:
+        options:
+          model: deepseek-chat
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.model.chat.client.autoconfigure.ChatClientAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration
+  threads:
+    virtual:
+      enabled: true  # Spring MVC 请求线程自动使用虚拟线程
+server:
+  port: 8086
+logging:
+  level:
+    org.springframework.ai.chat.client.advisor: DEBUG
+    org.springframework.ai: DEBUG

@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>语音导购 - 流式版</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            max-width: 720px; margin: 0 auto; padding: 32px 16px; color: #111827;
+            background: #f9fafb; min-height: 100vh; }
+        h2 { margin: 0 0 8px; font-size: 22px; }
+        .desc { color: #6b7280; margin: 0 0 24px; font-size: 14px; }
+        .card { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+        .controls { display: flex; align-items: center; gap: 16px; }
+        #mic { font-size: 16px; font-weight: 600; padding: 12px 28px; border-radius: 8px;
+            border: none; cursor: pointer; transition: all .15s; min-width: 140px; }
+        #mic.idle       { background: #2563eb; color: #fff; }
+        #mic.idle:hover { background: #1d4ed8; }
+        #mic.recording  { background: #dc2626; color: #fff; animation: pulse 1.5s infinite; }
+        #mic:disabled   { background: #9ca3af; cursor: not-allowed; animation: none; }
+        @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,.5); } 50% { box-shadow: 0 0 0 10px rgba(220,38,38,0); } }
+        .status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: #4b5563; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; }
+        .dot.connecting { background: #f59e0b; animation: blink 1s infinite; }
+        .dot.recording  { background: #dc2626; animation: blink 1s infinite; }
+        .dot.waiting    { background: #3b82f6; animation: blink 1s infinite; }
+        @keyframes blink { 50% { opacity: .3; } }
+        #meter { margin-top: 20px; height: 10px; background: #e5e7eb; border-radius: 5px; overflow: hidden; }
+        #meterBar { height: 100%; width: 0%;
+            background: linear-gradient(90deg, #10b981 0%, #f59e0b 60%, #dc2626 90%);
+            transition: width 60ms; }
+        #log { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px;
+            min-height: 200px; max-height: 360px; overflow-y: auto; line-height: 1.6; }
+        .row { padding: 2px 0; }
+        .ts  { color: #9ca3af; margin-right: 8px; }
+        .asr-partial { color: #6b7280; }
+        .asr-final   { color: #111827; font-weight: 600; }
+        .info        { color: #2563eb; }
+        .warn        { color: #d97706; }
+        .err         { color: #dc2626; }
+        /* —— 流式新增：实时字幕区 + 商品卡片区 —— */
+        #caption  { padding: 12px 0; font-size: 16px; line-height: 1.7; color: #111827;
+            min-height: 60px; white-space: pre-wrap; word-break: break-word; }
+        #caption:empty::before { content: "（这里实时显示 Agent 文字）"; color: #9ca3af; }
+        .product-card { display: flex; justify-content: space-between; align-items: center;
+            padding: 10px 12px; margin: 6px 0; border: 1px solid #e5e7eb;
+            border-radius: 8px; background: #f9fafb; font-size: 14px; }
+        .product-card b { color: #2563eb; }
+    </style>
+</head>
+<body>
+<h2>🎤 语音导购（流式版）</h2>
+<p class="desc">点击"开始录音"讲一句话（≥ 1 秒），再点一次停止。然后看商品卡片 + 实时字幕 + 听 TTS 流式回放。</p>
+
+<div class="card">
+    <div class="controls">
+        <button id="mic" class="idle" disabled>初始化中…</button>
+        <div class="status">
+            <span class="dot" id="dot"></span>
+            <span id="stateText">INIT</span>
+        </div>
+    </div>
+    <div id="meter"><div id="meterBar"></div></div>
+</div>
+
+<!-- 流式新增：商品卡片区 -->
+<div class="card"><div id="products"></div></div>
+<!-- 流式新增：实时字幕区 -->
+<div class="card"><div id="caption"></div></div>
+
+<div class="card"><div id="log"></div></div>
+
+<script>
+    // ========== 配置 ==========
+    // 调试用：URL 里直接挂 userId / sessionId，让 VoiceHandshakeInterceptor 解出来塞进 session.attributes。
+    // 生产里走 19 节的 AuthHandshakeInterceptor + Sa-Token，不要明文传 userId。
+    const DEMO_USER_ID = 1;                          // ⚠️ app_user 表里必须存在这条记录，否则 FK 会报错
+    const DEMO_SESSION_ID = `voice-${Date.now()}`;   // 随机会话 id
+    const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`
+        + `/ws/voice?userId=${DEMO_USER_ID}&sessionId=${DEMO_SESSION_ID}`;
+    const TARGET_RATE = 16000;
+    const CHUNK_MS = 100;
+    const MIN_RECORD_MS = 800;
+    const SILENCE_TAIL_MS = 800;
+    const HARD_CLOSE_MS = 20000;            // 流式拉长，避免长文本被切
+    const STREAM_SILENCE_MS = 3500;         // 流式：连续 N 毫秒无新帧 → 关 WS
+
+    // ========== 状态机 ==========
+    const State = Object.freeze({
+        IDLE: 'IDLE', CONNECTING: 'CONNECTING', RECORDING: 'RECORDING',
+        WAITING: 'WAITING', CLOSING: 'CLOSING',
+    });
+
+    // ========== DOM ==========
+    const $mic = document.getElementById('mic');
+    const $dot = document.getElementById('dot');
+    const $stateText = document.getElementById('stateText');
+    const $meter = document.getElementById('meterBar');
+    const $log = document.getElementById('log');
+    const $caption  = document.getElementById('caption');
+    const $products = document.getElementById('products');
+
+    // ========== 会话级资源 ==========
+    let state = State.IDLE;
+    let ws = null, audioCtx = null, workletNode = null, micStream = null;
+    let recordStartAt = 0, playbackTime = 0;
+    let userStopped = false;
+    let hardCloseTimer = null;
+    let streamSilenceTimer = null;          // 流式静默计时器
+
+    // ========== 状态切换 ==========
+    function setState(next) {
+        state = next;
+        $stateText.textContent = next;
+        $dot.className = 'dot';
+        const map = {
+            IDLE:       { text: '开始录音', cls: 'idle',      disabled: false, dot: '' },
+            CONNECTING: { text: '连接中…',  cls: 'idle',      disabled: true,  dot: 'connecting' },
+            RECORDING:  { text: '停止录音', cls: 'recording', disabled: false, dot: 'recording' },
+            WAITING:    { text: '等待回包…', cls: 'idle',     disabled: true,  dot: 'waiting' },
+            CLOSING:    { text: '关闭中…',  cls: 'idle',      disabled: true,  dot: 'waiting' },
+        };
+        const s = map[next];
+        $mic.textContent = s.text;
+        $mic.className = s.cls;
+        $mic.disabled = s.disabled;
+        if (s.dot) $dot.classList.add(s.dot);
+    }
+
+    // ========== 日志 ==========
+    function log(msg, cls = 'info') {
+        const row = document.createElement('div');
+        row.className = 'row ' + cls;
+        const ts = document.createElement('span');
+        ts.className = 'ts'; ts.textContent = new Date().toLocaleTimeString();
+        row.appendChild(ts);
+        row.appendChild(document.createTextNode(msg));
+        $log.appendChild(row);
+        $log.scrollTop = $log.scrollHeight;
+    }
+
+    // ========== AudioWorklet：worklet 内降采样到 16k ==========
+    const WORKLET_SRC = `
+class PcmCollector extends AudioWorkletProcessor {
+    constructor(options) {
+        super();
+        this.inputRate = options.processorOptions.inputRate;
+        this.targetRate = ${TARGET_RATE};
+        this.ratio = this.inputRate / this.targetRate;
+        this.samplesPerChunk = this.targetRate * ${CHUNK_MS} / 1000;
+        this.buf = new Int16Array(this.samplesPerChunk);
+        this.cursor = 0;
+        this.srcIdx = 0;
+    }
+    process(inputs) {
+        const input = inputs[0][0];
+        if (!input) return true;
+        let sum = 0;
+        for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+        this.port.postMessage({ type: 'level', rms: Math.sqrt(sum / input.length) });
+        while (this.srcIdx < input.length) {
+            const i0 = Math.floor(this.srcIdx);
+            const frac = this.srcIdx - i0;
+            const s0 = input[i0] || 0;
+            const s1 = input[i0 + 1] || s0;
+            const s  = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
+            this.buf[this.cursor++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            if (this.cursor === this.buf.length) {
+                this.port.postMessage({ type: 'pcm', data: this.buf.buffer.slice(0) });
+                this.cursor = 0;
+            }
+            this.srcIdx += this.ratio;
+        }
+        this.srcIdx -= input.length;
+        return true;
+    }
+}
+registerProcessor('pcm-collector', PcmCollector);
+`;
+
+    // ========== 资源清理 ==========
+    async function cleanup() {
+        if (hardCloseTimer)     { clearTimeout(hardCloseTimer);     hardCloseTimer = null; }
+        if (streamSilenceTimer) { clearTimeout(streamSilenceTimer); streamSilenceTimer = null; }
+        if (workletNode) { try { workletNode.disconnect(); } catch (_) {} workletNode = null; }
+        if (micStream)   { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+        if (audioCtx)    { try { await audioCtx.close(); } catch (_) {} audioCtx = null; }
+        if (ws)          { try { ws.close(); } catch (_) {} ws = null; }
+        $meter.style.width = '0%';
+    }
+
+    // ========== 开始录音 ==========
+    async function start() {
+        if (state !== State.IDLE) return;
+        setState(State.CONNECTING);
+
+        try {
+            await cleanup();
+            userStopped = false;
+            playbackTime = 0;
+            $caption.textContent = '';
+            $products.innerHTML = '';
+
+            ws = new WebSocket(WS_URL);
+            ws.binaryType = 'arraybuffer';
+            const session = ws;
+            ws.onopen  = () => log('WebSocket 已连接');
+            ws.onerror = () => log('WebSocket 通信异常', 'err');
+            ws.onclose = () => {
+                log('WebSocket 已关闭');
+                if (session === ws) setState(State.IDLE);
+            };
+            ws.onmessage = (e) => onMessage(session, e);
+            await waitOpen(ws);
+
+            audioCtx = new AudioContext();
+            log(`AudioContext 就绪，采样率 ${audioCtx.sampleRate} Hz`);
+
+            const blob = new Blob([WORKLET_SRC], { type: 'application/javascript' });
+            await audioCtx.audioWorklet.addModule(URL.createObjectURL(blob));
+
+            micStream = await navigator.mediaDevices.getUserMedia({
+                audio: { channelCount: 1, echoCancellation: true,
+                    noiseSuppression: false, autoGainControl: true }
+            });
+
+            const src = audioCtx.createMediaStreamSource(micStream);
+            workletNode = new AudioWorkletNode(audioCtx, 'pcm-collector', {
+                processorOptions: { inputRate: audioCtx.sampleRate }
+            });
+            workletNode.port.onmessage = (ev) => {
+                const m = ev.data;
+                if (m.type === 'pcm') {
+                    if (session === ws && ws.readyState === WebSocket.OPEN) ws.send(m.data);
+                } else if (m.type === 'level') {
+                    $meter.style.width = Math.min(100, m.rms * 400) + '%';
+                }
+            };
+            src.connect(workletNode);
+
+            recordStartAt = Date.now();
+            setState(State.RECORDING);
+            log('开始录音，请说一句完整的话');
+        } catch (e) {
+            log('启动失败：' + (e && e.message || e), 'err');
+            await cleanup();
+            setState(State.IDLE);
+        }
+    }
+
+    // ========== 停止录音 ==========
+    async function stop() {
+        if (state !== State.RECORDING) return;
+
+        const duration = Date.now() - recordStartAt;
+        if (duration < MIN_RECORD_MS) {
+            log(`录音时长 ${duration}ms，建议至少 1 秒（当前 ASR 仍会尝试识别）`, 'warn');
+        }
+
+        if (workletNode) { try { workletNode.disconnect(); } catch (_) {} workletNode = null; }
+        if (micStream)   { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+        $meter.style.width = '0%';
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(new Int16Array(TARGET_RATE * SILENCE_TAIL_MS / 1000).buffer);
+        }
+
+        userStopped = true;
+        setState(State.WAITING);
+        log(`录音结束（${duration}ms），等待 Agent 流式回包…`);
+
+        // 兜底：WAITING 最多等 HARD_CLOSE_MS
+        const session = ws;
+        hardCloseTimer = setTimeout(() => {
+            if (session && session.readyState === WebSocket.OPEN) {
+                log('兜底超时，主动关闭 WebSocket', 'warn');
+                session.close();
+            }
+        }, HARD_CLOSE_MS);
+    }
+
+    // ========== 处理后端消息 ==========
+    function onMessage(session, e) {
+        if (session !== ws) return;     // 旧会话残响丢弃
+        if (typeof e.data === 'string') {
+            let msg; try { msg = JSON.parse(e.data); } catch (_) { return; }
+            switch (msg.type) {
+                case 'asr':
+                    log(`ASR ${msg.final ? '[最终]' : '[实时]'} ${msg.text || '(空)'}`,
+                        msg.final ? 'asr-final' : 'asr-partial');
+                    // 流式版：final 时清空上一次的 caption / products；
+                    //        关闭时机交给 bumpStreamSilence（不再用 final 倒计时）
+                    if (msg.final && userStopped) {
+                        $caption.textContent = '';
+                        $products.innerHTML = '';
+                    }
+                    break;
+                case 'caption':
+                    appendCaption(msg.text);
+                    bumpStreamSilence(session);
+                    break;
+                case 'recommendation':
+                    renderProducts(msg.items);
+                    bumpStreamSilence(session);
+                    break;
+                default:
+                    log(`未知文本帧 type=${msg.type}`, 'warn');
+            }
+        } else {
+            playPcm(e.data);
+            bumpStreamSilence(session);
+        }
+    }
+
+    // ========== 字幕区 ==========
+    function appendCaption(text) {
+        if (!text) return;
+        $caption.textContent += text;
+    }
+
+    // ========== 商品卡片区 ==========
+    function renderProducts(items) {
+        $products.innerHTML = '';
+        if (!Array.isArray(items) || items.length === 0) return;
+        items.forEach((it, idx) => {
+            const card = document.createElement('div');
+            card.className = 'product-card';
+            const name  = (it.name || '商品').replace(/[<>&]/g,
+                c => ({'<':'&lt;','>':'&gt;','&':'&amp;'})[c]);
+            const price = it.price != null ? `¥${it.price}` : '—';
+            card.innerHTML = `<b>${idx + 1}. ${name}</b><span>${price}</span>`;
+            $products.appendChild(card);
+        });
+    }
+
+    // ========== 流式静默判断：连续 STREAM_SILENCE_MS 没收到任何流帧就关 WS ==========
+    function bumpStreamSilence(session) {
+        if (streamSilenceTimer) clearTimeout(streamSilenceTimer);
+        streamSilenceTimer = setTimeout(() => {
+            if (session === ws && ws && ws.readyState === WebSocket.OPEN
+                && (state === State.WAITING || state === State.RECORDING)) {
+                log(`流式静默 ${STREAM_SILENCE_MS}ms，关闭 WebSocket`);
+                setState(State.CLOSING);
+                try { session.close(); } catch (_) {}
+            }
+        }, STREAM_SILENCE_MS);
+    }
+
+    // ========== 播放 TTS PCM 帧（playbackTime 调度，自动顺序拼接） ==========
+    function playPcm(arrayBuf) {
+        if (!audioCtx) return;
+        const view = new DataView(arrayBuf);
+        const f32 = new Float32Array(view.byteLength / 2);
+        for (let i = 0; i < f32.length; i++) {
+            const s = view.getInt16(i * 2, true);
+            f32[i] = s < 0 ? s / 0x8000 : s / 0x7fff;
+        }
+        const buf = audioCtx.createBuffer(1, f32.length, TARGET_RATE);
+        buf.getChannelData(0).set(f32);
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(audioCtx.destination);
+        const startAt = Math.max(audioCtx.currentTime, playbackTime);
+        src.start(startAt);
+        playbackTime = startAt + buf.duration;
+    }
+
+    function waitOpen(ws) {
+        return new Promise((resolve, reject) => {
+            if (ws.readyState === WebSocket.OPEN) return resolve();
+            ws.addEventListener('open',  () => resolve(), { once: true });
+            ws.addEventListener('error', () => reject(new Error('WebSocket 连接失败')), { once: true });
+        });
+    }
+
+    // ========== 入口 ==========
+    $mic.addEventListener('click', () => {
+        if (state === State.IDLE) start();
+        else if (state === State.RECORDING) stop();
+    });
+    window.addEventListener('load', () => setState(State.IDLE));
+    window.addEventListener('beforeunload', () => cleanup());
+</script>
+</body>
+</html>

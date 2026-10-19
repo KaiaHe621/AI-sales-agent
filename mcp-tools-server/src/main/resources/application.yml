@@ -1,0 +1,16 @@
+server:
+  port: 8090
+spring:
+  main:
+    # web-application-type: none    # 不启动 Web 服务器
+    banner-mode: off              # 关掉 Banner，避免污染 stdio 输出
+  ai:
+    mcp:
+      server:
+        name: jichi-remote-tools
+        version: 1.0.0
+        type: SYNC
+        sse-message-endpoint: /mcp/messages
+
+logging:
+  config: classpath:logback-spring.xml
